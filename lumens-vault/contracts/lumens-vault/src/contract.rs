@@ -30,6 +30,7 @@ pub enum Error {
     TimelockNotExpired = 5,
     VaultNotFound = 6,
     InvalidAmount = 7,
+    InvalidLockPeriod = 8,
 }
 
 const DAY_IN_LEDGERS: u32 = 17280; // 86,400s / 5s-per-ledger
@@ -67,13 +68,18 @@ impl LumensVault {
     // Note: `///` doc comments on contract functions are embedded in the wasm's
     // spec metadata and are paid for in rent forever. Keep them to one line and
     // put the reasoning in `//` comments like this one.
-    pub fn __constructor(env: Env, admin: Address, default_timelock_ledgers: u32) {
+    pub fn __constructor(env: Env, admin: Address, min_lock_ledgers: u32, max_lock_ledgers: u32) {
         admin.require_auth();
+
+        if let Err(e) = Self::validate_lock_bounds(min_lock_ledgers, max_lock_ledgers) {
+            soroban_sdk::panic_with_error!(env, e);
+        }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
 
         let config = VaultConfig::V1(VaultConfigV1 {
-            default_timelock_ledgers,
+            min_lock_ledgers,
+            max_lock_ledgers,
         });
         env.storage().instance().set(&DataKey::Config, &config);
 
@@ -164,12 +170,15 @@ impl LumensVault {
         Ok(())
     }
 
-    pub fn update_config(env: Env, new_timelock_ledgers: u32) -> Result<(), Error> {
+    pub fn update_config(env: Env, min_lock_ledgers: u32, max_lock_ledgers: u32) -> Result<(), Error> {
         let admin = Self::get_admin(&env)?;
         admin.require_auth();
 
+        Self::validate_lock_bounds(min_lock_ledgers, max_lock_ledgers)?;
+
         let config = VaultConfig::V1(VaultConfigV1 {
-            default_timelock_ledgers: new_timelock_ledgers,
+            min_lock_ledgers,
+            max_lock_ledgers,
         });
         env.storage().instance().set(&DataKey::Config, &config);
         Ok(())
@@ -227,8 +236,8 @@ impl LumensVault {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        let config = Self::get_config(&env)?;
-        let unlock_ledger = env.ledger().sequence() + config.default_timelock_ledgers;
+        let config = Self::get_config(env.clone());
+        let unlock_ledger = env.ledger().sequence() + config.min_lock_ledgers;
 
         let vault_entry = VaultEntry::V1(VaultEntryV1 {
             amount,
@@ -378,7 +387,28 @@ impl LumensVault {
             .ok_or(Error::NotInitialized)
     }
 
+    pub fn get_config(env: Env) -> VaultConfigV1 {
+        let config: VaultConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .expect("Config not initialized");
+        match config {
+            VaultConfig::V1(c) => c,
+        }
+    }
+
     // --- Internal helpers ---
+
+    fn validate_lock_bounds(min_lock_ledgers: u32, max_lock_ledgers: u32) -> Result<(), Error> {
+        if min_lock_ledgers == 0 {
+            return Err(Error::InvalidLockPeriod);
+        }
+        if max_lock_ledgers < min_lock_ledgers {
+            return Err(Error::InvalidLockPeriod);
+        }
+        Ok(())
+    }
 
     fn get_admin(env: &Env) -> Result<Address, Error> {
         env.storage()
@@ -388,17 +418,6 @@ impl LumensVault {
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::NotInitialized)
-    }
-
-    fn get_config(env: &Env) -> Result<VaultConfigV1, Error> {
-        let config: VaultConfig = env
-            .storage()
-            .instance()
-            .get(&DataKey::Config)
-            .ok_or(Error::NotInitialized)?;
-        match config {
-            VaultConfig::V1(c) => Ok(c),
-        }
     }
 
     fn check_paused(env: &Env) -> Result<(), Error> {
