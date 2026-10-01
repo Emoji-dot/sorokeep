@@ -44,7 +44,10 @@
   ],
   "author": "Abdulmalik Alayande",
   "overrides": {
-    "glob": "11.1.0"
+    "glob": "11.1.0",
+    "axios": "^1.7.9",
+    "brace-expansion": "^2.0.1",
+    "qs": "^6.13.0"
   },
   "license": "MIT",
   "type": "module",
